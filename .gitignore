@@ -1,0 +1,31 @@
+# datasets / runs / weights: never commit (see README)
+datasets/
+runs/
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# secrets
+kaggle.json
+kaggle/
+
+# experiment pointer files (per-machine)
+.yolo_exp_name_*.txt
+
+# notebooks / python
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+
+# excel live records stay on Drive; docs/results.md is the committed record
+數據紀錄表*.xlsx
+*.xlsx
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

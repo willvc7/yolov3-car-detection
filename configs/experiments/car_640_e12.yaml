@@ -1,0 +1,11 @@
+# Baseline: 12 epochs from scratch (reproduces run1).
+exp: car_640_e12
+data: car
+hyp_base: hyps/hyp.scratch-high.yaml
+hyp_override: {}
+seed: 42
+train: {img: 640, batch: 16, epochs: 12, weights: '', cfg: models/yolov3.yaml,
+        cache: ram, project: runs/train}
+val:   {img: 640, batch-size: 16, iou: 0.65}
+sweep: {iou: [0.5, 0.6, 0.65], conf: [0.15, 0.25, 0.4]}
+detect: {img: 640, source: ../datasets/car/images/val, conf: 0.25}

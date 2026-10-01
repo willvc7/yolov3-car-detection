@@ -1,0 +1,10 @@
+# Tools runtime deps (this repo). Pinned versions verified 2026-10-01 (local CPU env).
+# Engine/Colab pins (torch +cu*, ultralytics, ...) are captured on first
+# Colab replay per REPO_BUILD_PLAN.md section 8 - do NOT guess them here.
+pandas==2.2.3
+PyYAML==6.0.3
+openpyxl==3.1.5
+tqdm==4.70.1
+Pillow==12.3.0
+matplotlib==3.11.2
+pytest==9.1.1
