@@ -3,7 +3,7 @@ title: yolov3-car-detection
 message: If you use this project, please cite the training engine and dataset below.
 type: software
 license: AGPL-3.0
-repository-code: https://github.com/<OWNER_TBD>/yolov3-car-detection
+repository-code: https://github.com/willvc7/yolov3-car-detection
 preferred-citation:
   type: software
   title: "YOLOv3 in PyTorch"
