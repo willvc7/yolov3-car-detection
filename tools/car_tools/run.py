@@ -232,28 +232,32 @@ def _run_capture(cmd, log_path):
 
 
 def resolve_name(cfg, exp_tag=None, dry_run=False, drive_root=None, new_exp=False):
-    """Resolve EXP_NAME. dry-run never touches the pointer file."""
+    """Resolve EXP_NAME (+BACKUP_DIR). dry-run never touches the pointer file."""
     tag = exp_tag or cfg["exp"]
     if dry_run:
-        return f"exp_DRYRUN_{_exp.safe_tag(tag)}"
+        return {"exp_name": f"exp_DRYRUN_{_exp.safe_tag(tag)}", "backup_dir": ""}
     info = _exp.open_experiment(tag, drive_root=drive_root or _exp.DEFAULT_ROOT,
                                 new_exp=new_exp)
-    return info["exp_name"]
+    return {"exp_name": info["exp_name"], "backup_dir": info["backup_dir"]}
 
 
 def run_stage(cfg_path, stage, dry_run=False, engine_dir="yolov3_pytorch",
               repo_root=REPO_ROOT, new_exp=False, drive_root=None):
     cfg = load_experiment(cfg_path)
     engine_dir = Path(engine_dir)
-    exp_name = resolve_name(cfg, dry_run=dry_run,
-                            drive_root=drive_root, new_exp=new_exp)
+    ident = resolve_name(cfg, dry_run=dry_run,
+                         drive_root=drive_root, new_exp=new_exp)
+    exp_name, backup_dir = ident["exp_name"], ident["backup_dir"]
     hyp = build_hyp_used(cfg, repo_root=repo_root)
+    hyp_rel = f"runs/{exp_name}/hyp.used.yaml"
 
     def _write_used():
         dest = engine_dir / "runs" / exp_name / "hyp.used.yaml"
         dest.parent.mkdir(parents=True, exist_ok=True)
         with open(dest, "w", encoding="utf-8") as f:
             yaml.dump(hyp, f, sort_keys=False, default_flow_style=False)
+        (engine_dir / "runs" / exp_name / "hyp_source.txt").write_text(
+            hyp_rel, encoding="utf-8")  # record.py 用它還原 hyp 檔名
         snap = engine_dir / "runs" / exp_name / "exp.snapshot.yaml"
         with open(cfg_path, encoding="utf-8") as f:
             snap.write_text(f.read(), encoding="utf-8")
@@ -290,6 +294,7 @@ def run_stage(cfg_path, stage, dry_run=False, engine_dir="yolov3_pytorch",
             batch_size=cfg.get("val", {}).get("batch-size", 16),
             iou_list=tuple(str(x) for x in sw.get("iou", ("0.5", "0.6", "0.65"))),
             conf_list=tuple(str(x) for x in sw.get("conf", ("0.15", "0.25", "0.4"))),
+            backup_dir=backup_dir,
         )
     if stage in ("detect", "all"):
         r = subprocess.run(detect_cmd)

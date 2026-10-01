@@ -97,6 +97,39 @@ def test_run_capture_raises_on_failure(tmp_path):
                          tmp_path / "val.txt")
 
 
+def test_run_stage_sweep_wiring(tmp_path, monkeypatch):
+    import car_tools.run as R
+    captured = {}
+
+    def fake_open(*a, **k):
+        return {"exp_name": "exp_T", "backup_dir": "/drive/exp_T",
+                "name_file": "x", "created": False}
+
+    def fake_sweep(exp, weights, **k):
+        captured.update(k)
+        captured["exp"] = exp
+        captured["weights"] = weights
+        return []
+
+    monkeypatch.setattr(R._exp, "open_experiment", fake_open)
+    monkeypatch.setattr(R._sweep, "run_sweep", fake_sweep)
+    monkeypatch.chdir(tmp_path)
+    eng = tmp_path / "eng"
+    eng.mkdir()
+    out = R.run_stage(str(REPO / "configs" / "experiments" / "car_640_e50.yaml"),
+                      "sweep", engine_dir=str(eng))
+    assert out == {"exp": "exp_T"}
+    assert captured["exp"] == "exp_T"
+    assert captured["weights"] == "runs/train/exp_T/weights/best.pt"
+    assert captured["backup_dir"] == "/drive/exp_T"
+    assert captured["data"] == "data/car.yaml"
+    assert captured["iou_list"] == ("0.5", "0.6", "0.65")
+    assert captured["conf_list"] == ("0.15", "0.25", "0.4")
+    assert (eng / "runs" / "exp_T" / "hyp.used.yaml").exists()
+    assert (eng / "runs" / "exp_T" / "hyp_source.txt").read_text(encoding="utf-8") == "runs/exp_T/hyp.used.yaml"
+    assert (eng / "runs" / "exp_T" / "exp.snapshot.yaml").exists()
+
+
 def test_e12_e50_configs_differ_only_in_exp_and_epochs():
     a = yaml.safe_load((REPO / "configs" / "experiments" / "car_640_e12.yaml").read_text(encoding="utf-8"))
     b = yaml.safe_load((REPO / "configs" / "experiments" / "car_640_e50.yaml").read_text(encoding="utf-8"))
