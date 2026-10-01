@@ -3,4 +3,6 @@ repos:
     rev: 0.8.1
     hooks:
       - id: nbstripout
-        args: [--keep-output, "display_data/image/png"]
+# NOTE: nbstripout 0.8.1 --keep-output is boolean (keeps everything);
+# selective mime-keep is not supported, so we strip all outputs.
+# Visuals live in docs/images/, not in committed outputs.
