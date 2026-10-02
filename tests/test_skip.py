@@ -153,6 +153,12 @@ def test_detect_miss_images_deleted(tmp_path):
     assert not ok and "no detect images" in why
 
 
+def test_tool_version_matches_package():
+    import car_tools
+    from car_tools import convert as C
+    assert C.TOOL_VERSION == car_tools.__version__ != "unknown"
+
+
 def test_manifest_hit_skips_conversion(tmp_path):
     from car_tools import convert as C
     raw = tmp_path / "car-raw" / "data"

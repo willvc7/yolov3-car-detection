@@ -13,6 +13,11 @@ from pathlib import Path
 
 import pandas as pd
 
+try:
+    from car_tools import __version__ as TOOL_VERSION
+except Exception:  # direct-script execution fallback; pinned by test below
+    TOOL_VERSION = "unknown"
+
 SEED = 42
 IMAGE_COL_CANDIDATES = ["image", "image_id", "filename", "file_name", "img", "name"]
 REQUIRED_BOX_COLS = ["xmin", "ymin", "xmax", "ymax"]
@@ -25,7 +30,7 @@ def pick_train_csv(raw_dir):
     csvs = sorted(raw_dir.rglob("*.csv"))
     assert csvs, f"{raw_dir} 下找不到 csv，請檢查 zip 結構"
     print("[TRY] 候選 CSV：", [c.name for c in csvs])
-    # 排除提交模板（image,bounds 假框）：只留含 xmin/ymin/xmax/ymax 的訓練標註
+
     cands = []
     for _c in csvs:
         try:
@@ -39,7 +44,7 @@ def pick_train_csv(raw_dir):
         else:
             print(f"[TRY] 跳過 {_c.name}（欄位={_cols}，缺 xmin/ymin/xmax/ymax，疑為提交模板）")
     assert cands, "找不到含 xmin/ymin/xmax/ymax 的訓練 CSV，請檢查 zip 內容"
-    # 檔名含 train/solution/label/annot 優先，否則列數最多者
+
     def _rank(_p):
         _n = _p.name.lower()
         _key = 0 if any(_k in _n for _k in RANK_NAME_KEYS) else 1
@@ -56,7 +61,7 @@ def load_annotations(csv_path):
     df.columns = [c.strip() for c in df.columns]
     print("columns =", list(df.columns), "rows =", len(df))
     print("nulls =", df.isnull().sum().to_dict())
-    # 欄名容錯：image / image_id / filename / file_name → 統一為 image
+
     for cand in IMAGE_COL_CANDIDATES:
         if cand in df.columns:
             img_col = cand
@@ -66,7 +71,7 @@ def load_annotations(csv_path):
     if img_col != "image":
         df = df.rename(columns={img_col: "image"})
         img_col = "image"
-    # 欄名大小寫容錯：XMIN/x_min 等 → xmin/ymin/xmax/ymax
+
     low = {c.lower().replace(" ", ""): c for c in df.columns}
     for k in REQUIRED_BOX_COLS:
         assert k in low or k in df.columns, f"CSV 缺少 {k} 欄（現有欄：{list(df.columns)}）"
@@ -111,7 +116,7 @@ def carcsv2yolo(df, img_col, img_dir, out_img_dir, out_lbl_dir):
     n_box, n_missing, n_dropped = 0, 0, 0
     for img_name, g in tqdm(df.groupby(img_col), desc=f"Converting {out_img_dir}"):
         src_img = Path(img_dir) / str(img_name)
-        if not src_img.exists():  # 大小寫/副檔名容錯找一次
+        if not src_img.exists():
             cands = list(Path(img_dir).glob(Path(str(img_name)).stem + ".*"))
             src_img = cands[0] if cands else src_img
         if not src_img.exists():
@@ -159,11 +164,54 @@ def verify_conversion(yolo_dir, check_dir, n=3):
     print("[TRY] 抽查圖 →", check_dir.resolve(), sorted(p.name for p in check_dir.glob("*")))
 
 
-def split_and_convert(raw_dir, yolo_dir, seed=SEED, check_dir="runs/convert_check"):
+def _csv_key(csv_path):
+    """CSV 指紋（檔名+大小+mtime）：換檔即失效。"""
+    st = Path(csv_path).stat()
+    return {"name": Path(csv_path).name, "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+
+
+def manifest_up_to_date(yolo_dir, csv_path, seed):
+    """manifest 吻合（同 csv＋同 seed＋同工具版本）才回傳 (True, reason, data)。"""
+    import json
+    mf = Path(yolo_dir) / "manifest.json"
+    if not mf.exists():
+        return False, "無 manifest.json，執行轉換", None
+    try:
+        m = json.loads(mf.read_text(encoding="utf-8"))
+    except Exception as e:
+        return False, f"manifest 損毀（{e}），重新轉換", None
+    if m.get("csv") != _csv_key(csv_path):
+        return False, f"CSV 已更換（現為 {Path(csv_path).name}），重新轉換", None
+    if m.get("seed") != seed:
+        return False, f"seed 已改（{m.get('seed')}→{seed}），重新轉換", None
+    if m.get("tool") != TOOL_VERSION:
+        return False, "轉換工具版本已變，重新轉換", None
+    tr, va = m["train"], m["val"]
+    return True, (f"manifest 吻合（{m['csv']['name']} seed={seed} "
+                  f"train={tr[0]}張/{tr[1]}框 val={va[0]}張/{va[1]}框）"), m
+
+
+def write_manifest(yolo_dir, csv_path, seed, r_tr, r_va):
+    import json
+    mf = Path(yolo_dir) / "manifest.json"
+    mf.write_text(json.dumps({
+        "csv": _csv_key(csv_path), "seed": seed, "tool": TOOL_VERSION,
+        "train": list(r_tr), "val": list(r_va),
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def split_and_convert(raw_dir, yolo_dir, seed=SEED, check_dir="runs/convert_check",
+                      skip_done=False):
     """Full Cell27 flow. Returns dict with counts for train/val."""
     raw_dir, yolo_dir = Path(raw_dir), Path(yolo_dir)
     csv_path = pick_train_csv(raw_dir)
     df, img_col = load_annotations(csv_path)
+    if skip_done:
+        ok, why, m = manifest_up_to_date(yolo_dir, csv_path, seed)
+        if ok:
+            print(f"SKIP convert: {why}")
+            return {"train": tuple(m["train"]), "val": tuple(m["val"])}
+        print(f"RUN convert: {why}")
     img_dir = locate_image_dir(raw_dir)
     missing = [n for n in df[img_col].unique()[:5] if not (img_dir / str(n)).exists()]
     print("[TRY] 前5檔名存在抽查，缺檔範例：", missing if missing else "全存在")
@@ -175,5 +223,6 @@ def split_and_convert(raw_dir, yolo_dir, seed=SEED, check_dir="runs/convert_chec
     print(f"[TRY] train: imgs={r_tr[0]} boxes={r_tr[1]} missing={r_tr[2]} dropped={r_tr[3]}")
     print(f"[TRY] val:   imgs={r_va[0]} boxes={r_va[1]} missing={r_va[2]} dropped={r_va[3]}")
     verify_conversion(yolo_dir, check_dir)
+    write_manifest(yolo_dir, csv_path, seed, r_tr, r_va)
     print("\nDone!")
     return {"train": r_tr, "val": r_va}
