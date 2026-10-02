@@ -18,24 +18,24 @@ try:
 except ImportError:  # pragma: no cover
     raise SystemExit("缺少 openpyxl，請先安裝（pip install openpyxl）")
 
-TOTAL_H = ["實驗名稱", "日期", "資料集", "epochs", "訓練耗時(h)", "batch", "imgsz",
+TOTAL_H = ["實驗名稱", "日期", "資料集", "epochs", "batch", "imgsz",
            "lr0", "lrf", "momentum", "weight_decay", "warmup_epochs",
            "box", "cls", "obj", "iou_t", "anchor_t", "mosaic", "mixup", "fl_gamma", "scale",
            "初始weights", "cfg", "hyp檔",
            "驗證iou", "推論conf",
            "train_box_loss", "train_obj_loss", "train_cls_loss",
            "val_box_loss", "val_obj_loss", "val_cls_loss",
-           "P", "R", "mAP50", "mAP50-95",
+           "P", "R", "mAP50", "mAP50-95", "training_time(h)",
            "備註"]
 TOTAL_G = ["基本資訊", "基本資訊", "基本資訊",
-           "訓練設定", "訓練設定", "訓練設定", "訓練設定",
+           "訓練設定", "訓練設定", "訓練設定",
            "學習率排程", "學習率排程", "學習率排程", "學習率排程", "學習率排程",
            "損失與錨點", "損失與錨點", "損失與錨點", "損失與錨點", "損失與錨點",
            "資料增強", "資料增強", "資料增強", "資料增強",
            "模型與資料", "模型與資料", "模型與資料",
            "驗證推論條件", "驗證推論條件",
            "損失終值", "損失終值", "損失終值", "損失終值", "損失終值", "損失終值",
-           "成績 metrics", "成績 metrics", "成績 metrics", "成績 metrics",
+           "成績 metrics", "成績 metrics", "成績 metrics", "成績 metrics", "成績 metrics",
            "備註"]
 CLS_G = ["基本資訊", "類別資訊", "類別資訊",
          "成績 metrics", "成績 metrics", "成績 metrics", "成績 metrics", "解讀"]
@@ -90,6 +90,22 @@ def ensure(ws_name, headers, groups, wb):
     return ws
 
 
+def _data_names(opt_data, runs_root):
+    """從 data yaml 讀 names（支援 list 或 {id: name}）；找不到回傳 None。"""
+    cands = (Path(str(opt_data or "")), Path(runs_root) / ".." / str(opt_data or ""))
+    for cand in cands:
+        try:
+            d = yaml.safe_load(cand.read_text(encoding="utf-8")) or {}
+        except Exception:
+            continue
+        names = d.get("names")
+        if isinstance(names, dict):
+            names = [names[k] for k in sorted(names)]
+        if isinstance(names, list) and names:
+            return [str(n) for n in names]
+    return None
+
+
 def update_workbook(exp, runs_root="runs",
                     cloud_xlsx="/content/drive/MyDrive/YOLO_Experiments/數據紀錄表.xlsx",
                     local_xlsx="數據紀錄表.xlsx",
@@ -128,9 +144,11 @@ def update_workbook(exp, runs_root="runs",
     else:
         print(f"找不到 {results}，先確認訓練已完成")
 
+    _opt_data = None
     if opt.exists():
         with open(opt, encoding="utf-8") as _fh:
             d = yaml.safe_load(_fh) or {}
+            _opt_data = str(d.get("data") or "")
         for k, nk in {"batch_size": "batch", "imgsz": "imgsz", "cfg": "cfg", "data": "資料集"}.items():
             if k in d and d[k] not in (None, ""):
                 row[nk] = d[k]
@@ -170,7 +188,7 @@ def update_workbook(exp, runs_root="runs",
     if _tt.exists():
         try:
             _sec = float(json.loads(_tt.read_text(encoding="utf-8")).get("seconds", 0))
-            row["訓練耗時(h)"] = round(_sec / 3600, 3)
+            row["training_time(h)"] = round(_sec / 3600, 3)
         except Exception as _e:
             print(f"train_time.json 解析失敗（{_e}），該欄留白")
 
@@ -181,6 +199,7 @@ def update_workbook(exp, runs_root="runs",
     if valtxt.exists():
         t = valtxt.read_text(encoding="utf-8", errors="ignore").replace("\r", "\n")
         t = re.sub(r"\x1b\[[0-9;]*m", "", t)
+        _all = None
         for line in t.splitlines():
             p = line.strip().split()
             if len(p) >= 7 and p[1].isdigit() and p[2].isdigit() and p[0] != "all":
@@ -193,6 +212,31 @@ def update_workbook(exp, runs_root="runs",
                                  "P": vals[0], "R": vals[1],
                                  "mAP50": vals[2], "mAP50-95": vals[3],
                                  "解讀(初學者看這欄)": ""})
+            elif len(p) >= 7 and p[0] == "all" and p[1].isdigit() and p[2].isdigit():
+                try:
+                    _all = (int(p[2]), [float(x) for x in p[3:7]])
+                except ValueError:
+                    _all = None
+        # nc=1 時引擎只印 all 列：all 即該類本身，以其值合成單一類別列
+        if not cls_rows and _all is not None:
+            _names = _data_names(_opt_data, runs_root)
+            _inst, _vals = _all
+            if _names is not None and len(_names) == 1:
+                cls_rows.append({"實驗名稱": exp, "類別": _names[0],
+                                 "Instances(數量)": _inst,
+                                 "P": _vals[0], "R": _vals[1],
+                                 "mAP50": _vals[2], "mAP50-95": _vals[3],
+                                 "解讀(初學者看這欄)": ""})
+                print(f"單類別資料集：以 all 列合成類別「{_names[0]}」明細")
+            elif _names is None:
+                # opt.yaml/data yaml 找不到：寧可保留 all 聚合值（類別標 all），也不要靜默丟失
+                cls_rows.append({"實驗名稱": exp, "類別": "all",
+                                 "Instances(數量)": _inst,
+                                 "P": _vals[0], "R": _vals[1],
+                                 "mAP50": _vals[2], "mAP50-95": _vals[3],
+                                 "解讀(初學者看這欄)": ""})
+                print(f"[警告] 找不到 data names（opt.yaml data={_opt_data!r}），"
+                      f"類別明細以 all 聚合列暫存（類別=all），請確認 data yaml 後重跑 record")
         print(f"解析 val.txt：{len(cls_rows)} 個類別")
     else:
         print(f"找不到 {valtxt}，跳過類別明細")
@@ -210,11 +254,11 @@ def update_workbook(exp, runs_root="runs",
     _row_idx = next(
         (r for r in range(HEADER_ROW + 1, ws.max_row + 1) if str(ws.cell(r, 1).value) == exp), None)
     if _row_idx is not None:
-        _ti = TOTAL_H.index("訓練耗時(h)")
+        _ti = TOTAL_H.index("training_time(h)")
         if _vals[_ti] is None and ws.cell(_row_idx, _ti + 1).value is not None:
             _vals[_ti] = ws.cell(_row_idx, _ti + 1).value  # 保留手填值，不以空白覆蓋
-            row["訓練耗時(h)"] = _vals[_ti]  # 回傳值與寫入值一致
-            print("訓練耗時(h) 沿用既有手填值")
+            row["training_time(h)"] = _vals[_ti]  # 回傳值與寫入值一致
+            print("training_time(h) 沿用既有手填值")
         for _c, _v in enumerate(_vals, 1):
             ws.cell(_row_idx, _c).value = _v
         print(f"{exp} 已存在，已原地更新第 {_row_idx} 列（重跑會覆寫，不會重複）")
