@@ -1,21 +1,40 @@
 # yolov3-car-detection
 
+[![ci](https://github.com/willvc7/yolov3-car-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/willvc7/yolov3-car-detection/actions)
 Car object detection practice with YOLOv3 (Kaggle `sshikamaru/car-object-detection`).
 
-Status: Phase 1a/1b done (`tools/`, `configs/`, tests green). `notebooks/YOLOv3_car.ipynb`
-calls `python -m car_tools.run --exp <yaml> --stage <stage>`; replay chain
-`car_640_e12.yaml` -> `car_640_e50.yaml` -> `car_640_e50_lr002.yaml` reproduces
-run1 -> run2 -> run3 from scratch. Full plan: `YOLO/REPO_BUILD_PLAN.md`
-(in the course notes repo, not committed here).
+Single-class `car` detector trained from scratch (355 annotated street-view
+images, 8:2 image-level split). One YAML per experiment drives the full
+pipeline (`python -m car_tools.run --exp <yaml> --stage all`):
+data prep -> train -> validate -> sweep thresholds -> record metrics.
+
+## Results (val: 71 images / 107 instances)
+
+| exp | epochs | lr0 | P | R | mAP50 | mAP50-95 | train time (h) |
+|---|---|---|---|---|---|---|---|
+| `car_640_e12` | 12 | 0.1 | 0.0128 | 0.9626 | 0.4157 | 0.1122 | 0.085 |
+| `car_640_e50` | 50 | 0.1 | 0.9808 | 0.9572 | 0.988 | 0.5779 | 0.354 |
+
+See `docs/results.md` for the honest log, including the failed 12-epoch
+baseline (71/71 images with no detections at `conf>=0.15` - diagnosed as
+undertraining, fixed by epochs 12 -> 50 with nothing else changed).
+
+## Reproduce (Colab, Tesla T4)
+
+1. `scripts/colab_bootstrap.sh` - clones the pinned training engine, installs deps.
+2. `scripts/fetch_data.sh` - downloads the Kaggle set (needs `~/.kaggle/kaggle.json`).
+3. Open `notebooks/YOLOv3_car.ipynb`, set `EXP_YAML` to one of
+   `configs/experiments/*.yaml`, Run-all. Each experiment is a 2-line diff
+   from the previous one; metrics land in the record workbook + `docs/results.md`.
 
 ## Layout
 
 - `tools/car_tools/` - experiment tooling (AGPL-3.0, see LICENSE)
 - `tests/` - CPU-only pytest suite (`python -m pytest -q`)
-- `configs/` - base hyperparams + per-experiment yamls (Phase 1b)
-- `notebooks/` - thin caller notebook (Phase 2)
-- `scripts/` - Colab bootstrap + data fetch (Phase 1b)
-- `docs/` - tuning table + honest results (Phase 2)
+- `configs/` - base hyperparams + per-experiment yamls
+- `notebooks/` - thin caller notebook
+- `scripts/` - Colab bootstrap + data fetch
+- `docs/` - tuning table + honest results
 
 Training engine (`ws6125/yolov3_pytorch`, fork of `ultralytics/yolov3`) stays a
 pinned runtime dependency - it is cloned by `scripts/colab_bootstrap.sh`,

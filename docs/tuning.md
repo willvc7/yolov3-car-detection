@@ -34,7 +34,7 @@ what it does, suggested range, and whether changing it requires retraining.
 
 | Key | Notes |
 |---|---|
-| `models/yolov3.yaml` anchors | leave to AutoAnchor (BPR=1.000 on car data, verified run1) |
+| `models/yolov3.yaml` anchors | leave to AutoAnchor (BPR=1.000 on car data, verified on the 12-epoch baseline run) |
 | `train.evolve` | hyperparameter evolution; expensive, last resort |
 | `train.single-cls/rect/multi-scale/image-weights/freeze/label-smoothing` | niche; change only with a hypothesis |
 | `train.cos-lr` | cosine schedule alternative to linear `lrf` decay |
@@ -43,3 +43,18 @@ what it does, suggested range, and whether changing it requires retraining.
 
 New key = one row here + one allowlist entry in `tools/car_tools/run.py` +
 one test in `tests/test_run_cmd.py`. Unknown keys fail fast with suggestions.
+
+## Smart re-run (--skip-done)
+
+`python -m car_tools.run --exp <yaml> --stage all --skip-done` skips stages
+whose products are up to date (prints `SKIP <stage>: <reason>` per stage):
+
+- train: `best.pt` + `results.csv` epochs == yaml + snapshot == current yaml
+- val: `val.txt` + `val.meta.json` (weights fingerprint / iou / config)
+- sweep: per-item cache (always skip-aware, no flag needed)
+- detect: images + `meta.json` (conf / weights fingerprint / config)
+- convert (notebook cell): `manifest.json` (csv fingerprint + seed + tool version)
+- record: always runs (seconds, idempotent)
+
+Rules: any yaml word change invalidates dependents (fail-open to RUN, never
+stale-SKIP); single `--stage X` without the flag forces that stage.

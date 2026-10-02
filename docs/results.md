@@ -4,16 +4,17 @@ Source of truth: `數據紀錄表.xlsx` 實驗總表 (values below copied verbat
 failed baselines are kept, not beautified). Val = 71 images / 107 instances,
 single class `car`, `val.py --iou 0.65`.
 
-| exp | epochs | lr0 | P | R | mAP50 | mAP50-95 | detect @conf 0.25 | train time (T4) |
+| exp | epochs | lr0 | P | R | mAP50 | mAP50-95 | detect @conf 0.25 | 訓練耗時(h) |
 |---|---|---|---|---|---|---|---|---|
-| `car_640_e12` (run1) | 12 | 0.1 | 0.0128 | 0.9626 | 0.4157 | 0.1122 | 71/71 no detections | ~5 min |
-| `car_640_e50` (run2) | 50 | 0.1 | 0.9808 | 0.9572 | 0.988 | 0.5779 | boxes appear | 0.354 h (~21 min) |
+| `car_640_e12` (run1) | 12 | 0.1 | 0.0128 | 0.9626 | 0.4157 | 0.1122 | 71/71 no detections | 0.085 |
+| `car_640_e50` (run2) | 50 | 0.1 | 0.9808 | 0.9572 | 0.988 | 0.5779 | boxes appear | 0.354 |
 | `car_640_e50_lr002` (run3) | 50 | 0.02 | TBD | TBD | TBD | TBD | TBD | TBD |
 
 Config files: `configs/experiments/car_640_e12.yaml`,
 `configs/experiments/car_640_e50.yaml`,
 `configs/experiments/car_640_e50_lr002.yaml`
 (diff between consecutive runs is exactly the single changed variable).
+`run1/2/3` below are chronological execution nicknames, one per config file.
 
 ## Reading notes
 

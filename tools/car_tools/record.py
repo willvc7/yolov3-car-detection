@@ -5,6 +5,7 @@ Ported from YOLOv3_try2.ipynb Cell47. Statements unchanged;
 paths/conditions became parameters (defaults preserve Cell47 behavior).
 """
 
+import json
 import math
 import re
 from pathlib import Path
@@ -17,25 +18,25 @@ try:
 except ImportError:  # pragma: no cover
     raise SystemExit("缺少 openpyxl，請先安裝（pip install openpyxl）")
 
-TOTAL_H = ["實驗名稱", "日期", "資料集", "epochs", "epochs_done", "batch", "imgsz",
+TOTAL_H = ["實驗名稱", "日期", "資料集", "epochs", "訓練耗時(h)", "batch", "imgsz",
            "lr0", "lrf", "momentum", "weight_decay", "warmup_epochs",
            "box", "cls", "obj", "iou_t", "anchor_t", "mosaic", "mixup", "fl_gamma", "scale",
            "初始weights", "cfg", "hyp檔",
-           "驗證iou", "驗證用權重", "推論conf",
+           "驗證iou", "推論conf",
            "train_box_loss", "train_obj_loss", "train_cls_loss",
            "val_box_loss", "val_obj_loss", "val_cls_loss",
            "P", "R", "mAP50", "mAP50-95",
-           "best.pt雲端路徑", "備份資料夾", "備註"]
+           "備註"]
 TOTAL_G = ["基本資訊", "基本資訊", "基本資訊",
            "訓練設定", "訓練設定", "訓練設定", "訓練設定",
            "學習率排程", "學習率排程", "學習率排程", "學習率排程", "學習率排程",
            "損失與錨點", "損失與錨點", "損失與錨點", "損失與錨點", "損失與錨點",
            "資料增強", "資料增強", "資料增強", "資料增強",
            "模型與資料", "模型與資料", "模型與資料",
-           "驗證推論條件", "驗證推論條件", "驗證推論條件",
+           "驗證推論條件", "驗證推論條件",
            "損失終值", "損失終值", "損失終值", "損失終值", "損失終值", "損失終值",
            "成績 metrics", "成績 metrics", "成績 metrics", "成績 metrics",
-           "檔案位置", "檔案位置", "備註"]
+           "備註"]
 CLS_G = ["基本資訊", "類別資訊", "類別資訊",
          "成績 metrics", "成績 metrics", "成績 metrics", "成績 metrics", "解讀"]
 CLS_H = ["實驗名稱", "類別", "Instances(數量)",
@@ -54,7 +55,7 @@ DATA_DISPLAY = {"data/car.yaml": "Car-Object-Detection(1類)"}
 
 
 def _merge_runs(ws, groups):
-    """合併第1列相同群組的儲存格（安全版，重複執行不報錯）"""
+    """合併第1列相同羣組的儲存格（安全版，重複執行不報錯）"""
     start = 0
     for i in range(1, len(groups) + 1):
         if i == len(groups) or groups[i] != groups[start]:
@@ -80,7 +81,7 @@ def ensure(ws_name, headers, groups, wb):
             ws.cell(r, 1).value is not None for r in range(HEADER_ROW + 1, ws.max_row + 1))
         if _has:
             raise ValueError(f"工作表「{ws_name}」表頭與程式預期不符，為避免錯位寫入請先備份並對齊表頭")
-    # 建立雙行表頭（群組列 + 欄位列）
+    # 建立雙行表頭（羣組列 + 欄位列）
     for c, g in enumerate(groups, 1):
         ws.cell(1, c).value = g
     _merge_runs(ws, groups)
@@ -93,7 +94,7 @@ def update_workbook(exp, runs_root="runs",
                     cloud_xlsx="/content/drive/MyDrive/YOLO_Experiments/數據紀錄表.xlsx",
                     local_xlsx="數據紀錄表.xlsx",
                     drive_marker="/content/drive/MyDrive",
-                    val_iou=0.65, val_w="best.pt", det_conf=0.25, note=None):
+                    val_iou=0.65, det_conf=0.25, note=None):
     """收集 runs/<exp> 產物並寫入（可重複跑不重複寫）。note 寫入備註欄。"""
     assert exp, "缺少 EXP_NAME"
     print("[record v6.0] EXP =", exp)
@@ -106,9 +107,7 @@ def update_workbook(exp, runs_root="runs",
 
     # ── 收集資料 ──────────────────────────────────────────────
     row = {"實驗名稱": exp,
-           "備份資料夾": f"YOLO_Experiments/{exp}",
-           "best.pt雲端路徑": f"YOLO_Experiments/{exp}/train/{exp}/weights/best.pt",
-           "驗證iou": val_iou, "驗證用權重": val_w, "推論conf": det_conf}
+           "驗證iou": val_iou, "推論conf": det_conf}
     if note:
         row["備註"] = note
 
@@ -125,7 +124,6 @@ def update_workbook(exp, runs_root="runs",
                     row[nk] = _v
                 except (TypeError, ValueError):
                     pass
-        row["epochs_done"] = len(df)
         row.setdefault("epochs", len(df))
     else:
         print(f"找不到 {results}，先確認訓練已完成")
@@ -168,6 +166,14 @@ def update_workbook(exp, runs_root="runs",
             if k in h and k not in row:
                 row[k] = h[k]
 
+    _tt = runs_root / "train" / exp / "train_time.json"
+    if _tt.exists():
+        try:
+            _sec = float(json.loads(_tt.read_text(encoding="utf-8")).get("seconds", 0))
+            row["訓練耗時(h)"] = round(_sec / 3600, 3)
+        except Exception as _e:
+            print(f"train_time.json 解析失敗（{_e}），該欄留白")
+
     print("待寫入總表:", row)
 
     # ── 解析 val.txt 類別明細 ─────────────────────────────────
@@ -204,6 +210,11 @@ def update_workbook(exp, runs_root="runs",
     _row_idx = next(
         (r for r in range(HEADER_ROW + 1, ws.max_row + 1) if str(ws.cell(r, 1).value) == exp), None)
     if _row_idx is not None:
+        _ti = TOTAL_H.index("訓練耗時(h)")
+        if _vals[_ti] is None and ws.cell(_row_idx, _ti + 1).value is not None:
+            _vals[_ti] = ws.cell(_row_idx, _ti + 1).value  # 保留手填值，不以空白覆蓋
+            row["訓練耗時(h)"] = _vals[_ti]  # 回傳值與寫入值一致
+            print("訓練耗時(h) 沿用既有手填值")
         for _c, _v in enumerate(_vals, 1):
             ws.cell(_row_idx, _c).value = _v
         print(f"{exp} 已存在，已原地更新第 {_row_idx} 列（重跑會覆寫，不會重複）")
