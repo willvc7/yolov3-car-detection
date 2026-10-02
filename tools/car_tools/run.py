@@ -11,9 +11,9 @@ Path contract (fixed, see docs/tuning.md):
 
 import argparse
 import difflib
+import hashlib
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import yaml
@@ -231,6 +231,79 @@ def _run_capture(cmd, log_path):
     return text
 
 
+def _cfg_hash(cfg, keys):
+    """配置哈希（只看給定節）：任一字改動即變化；順序無關。"""
+    sub = {k: cfg.get(k) for k in keys}
+    blob = yaml.dump(sub, sort_keys=True, allow_unicode=True).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+def _results_epochs(results_csv):
+    with open(results_csv, encoding="utf-8", errors="ignore") as f:
+        return sum(1 for _ in f) - 1  # 扣表頭
+
+
+def train_up_to_date(cfg, exp_name, runs_dir, cfg_path):
+    """(ok, reason)。best.pt＋results.csv 輪數達標＋快照與現 yaml 逐字一致才算完成。"""
+    base = Path(runs_dir) / "train" / exp_name
+    if not (base / "weights" / "best.pt").exists():
+        return False, "missing best.pt"
+    try:
+        if (base / "exp.snapshot.yaml").read_bytes() != Path(cfg_path).read_bytes():
+            return False, "config changed since last train"
+    except OSError:
+        return False, "no comparable snapshot"
+    want = int((cfg.get("train") or {}).get("epochs", 0))
+    res = base / "results.csv"
+    if not res.exists():
+        return False, "missing results.csv"
+    rows = _results_epochs(res)
+    if rows != want:
+        return False, f"results.csv has {rows} epochs, want {want} (crashed or extended?)"
+    return True, f"best.pt exists + results.csv {rows}/{want} + snapshot match"
+
+
+def val_up_to_date(cfg, exp_name, runs_dir, weights_path):
+    """(ok, reason)。val.txt＋val.meta.json（權重指紋/iou/配置）全吻合才算完成。"""
+    import json
+    base = Path(runs_dir) / "val" / exp_name
+    if not (base / "val.txt").exists():
+        return False, "missing val.txt"
+    try:
+        m = json.loads((base / "val.meta.json").read_text(encoding="utf-8"))
+    except Exception:
+        return False, "no val.meta.json"
+    want_iou = str((cfg.get("val") or {}).get("iou", "0.65"))
+    if m.get("weights_key") != _sweep.weights_key(weights_path):
+        return False, "weights changed since last val"
+    if str(m.get("iou")) != want_iou:
+        return False, f"iou changed ({m.get('iou')}->{want_iou})"
+    if m.get("config_hash") != _cfg_hash(cfg, ("val", "data")):
+        return False, "val config changed"
+    return True, "val.txt exists + weights/iou/config match"
+
+
+def detect_up_to_date(cfg, exp_name, runs_dir, weights_path):
+    """(ok, reason)。jpg＋meta.json（conf/權重指紋/配置）全吻合才算完成。"""
+    import json
+    base = Path(runs_dir) / "detect" / exp_name
+    jpgs = sorted(base.glob("*.jpg")) if base.exists() else []
+    if not jpgs:
+        return False, "no detect images"
+    try:
+        m = json.loads((base / "meta.json").read_text(encoding="utf-8"))
+    except Exception:
+        return False, "no detect meta.json"
+    want_conf = str((cfg.get("detect") or {}).get("conf", "0.25"))
+    if m.get("weights_key") != _sweep.weights_key(weights_path):
+        return False, "weights changed since last detect"
+    if str(m.get("conf")) != want_conf:
+        return False, f"conf changed ({m.get('conf')}->{want_conf})"
+    if m.get("config_hash") != _cfg_hash(cfg, ("detect", "data")):
+        return False, "detect config changed"
+    return True, f"{len(jpgs)} images + weights/conf/config match"
+
+
 def resolve_name(cfg, exp_tag=None, dry_run=False, drive_root=None, new_exp=False):
     """Resolve EXP_NAME (+BACKUP_DIR). dry-run never touches the pointer file."""
     tag = exp_tag or cfg["exp"]
@@ -242,9 +315,12 @@ def resolve_name(cfg, exp_tag=None, dry_run=False, drive_root=None, new_exp=Fals
 
 
 def run_stage(cfg_path, stage, dry_run=False, engine_dir="yolov3_pytorch",
-              repo_root=REPO_ROOT, new_exp=False, drive_root=None):
+              repo_root=REPO_ROOT, new_exp=False, drive_root=None,
+              skip_done=False):
     cfg = load_experiment(cfg_path)
+    cfg["_cfg_path"] = str(cfg_path)
     engine_dir = Path(engine_dir)
+    runs_dir = engine_dir / "runs"
     ident = resolve_name(cfg, dry_run=dry_run,
                          drive_root=drive_root, new_exp=new_exp)
     exp_name, backup_dir = ident["exp_name"], ident["backup_dir"]
@@ -263,29 +339,73 @@ def run_stage(cfg_path, stage, dry_run=False, engine_dir="yolov3_pytorch",
             snap.write_text(f.read(), encoding="utf-8")
         return dest
 
+    def _write_val_meta(weights_path):
+        import json
+        (runs_dir / "val" / exp_name / "val.meta.json").write_text(json.dumps({
+            "weights_key": _sweep.weights_key(weights_path),
+            "iou": str((cfg.get("val") or {}).get("iou", "0.65")),
+            "config_hash": _cfg_hash(cfg, ("val", "data")),
+        }, ensure_ascii=False), encoding="utf-8")
+
+    def _write_detect_meta(weights_path):
+        import json
+        (runs_dir / "detect" / exp_name / "meta.json").write_text(json.dumps({
+            "weights_key": _sweep.weights_key(weights_path),
+            "conf": str((cfg.get("detect") or {}).get("conf", "0.25")),
+            "config_hash": _cfg_hash(cfg, ("detect", "data")),
+        }, ensure_ascii=False), encoding="utf-8")
+
     train_cmd = build_train_cmd(cfg, exp_name)
     val_cmd = build_val_cmd(cfg, exp_name)
     detect_cmd = build_detect_cmd(cfg, exp_name)
     sw = cfg.get("sweep") or {}
+    weights_rel = f"runs/train/{exp_name}/weights/best.pt"
+    weights_path = runs_dir / "train" / exp_name / "weights" / "best.pt"
+
+    decisions = {}
+    if skip_done and stage in ("all", "train", "val", "detect"):
+        decisions["train"], decisions["val"], decisions["detect"] = (
+            train_up_to_date(cfg, exp_name, runs_dir, cfg_path),
+            val_up_to_date(cfg, exp_name, runs_dir, weights_path),
+            detect_up_to_date(cfg, exp_name, runs_dir, weights_path),
+        )
 
     if dry_run:
         print("EXP =", exp_name)
-        print("TRAIN:", " ".join(train_cmd))
-        print("VAL:", " ".join(val_cmd))
-        print("DETECT:", " ".join(detect_cmd))
+        for _st, _cmd in (("train", train_cmd), ("val", val_cmd), ("detect", detect_cmd)):
+            tag = ""
+            if _st in decisions:
+                ok, why = decisions[_st]
+                tag = f" [{'SKIP' if ok else 'RUN'}: {why}]"
+            print(f"{_st.upper()}:", " ".join(_cmd), tag)
         print("HYP_USED:", hyp)
         return {"exp": exp_name, "train": train_cmd, "val": val_cmd,
-                "detect": detect_cmd, "hyp": hyp}
+                "detect": detect_cmd, "hyp": hyp, "decisions": decisions}
 
     _write_used()
     os.chdir(engine_dir)
-    if stage in ("train", "all"):
+
+    def _gate(name):
+        if not skip_done or name not in decisions:
+            return True
+        ok, why = decisions[name]
+        print(f"{'SKIP' if ok else 'RUN'} {name}: {why}")
+        return not ok
+
+    if stage in ("train", "all") and _gate("train"):
+        import time as _time
+        _t0 = _time.monotonic()
         r = subprocess.run(train_cmd)
+        _dt = _time.monotonic() - _t0
         if r.returncode != 0:
             raise RuntimeError(f"train 失敗 (returncode={r.returncode})")
-    if stage in ("val", "all"):
+        import json as _json
+        (Path("runs") / "train" / exp_name / "train_time.json").write_text(
+            _json.dumps({"seconds": round(_dt, 1)}), encoding="utf-8")
+    if stage in ("val", "all") and _gate("val"):
         # tee to runs/val/<exp>/val.txt (record.py parses it for 類別明細)
         _run_capture(val_cmd, Path(engine_dir) / "runs" / "val" / exp_name / "val.txt")
+        _write_val_meta(weights_path)
     if stage in ("sweep", "all"):
         _sweep.run_sweep(
             exp_name, f"runs/train/{exp_name}/weights/best.pt",
@@ -296,16 +416,16 @@ def run_stage(cfg_path, stage, dry_run=False, engine_dir="yolov3_pytorch",
             conf_list=tuple(str(x) for x in sw.get("conf", ("0.15", "0.25", "0.4"))),
             backup_dir=backup_dir,
         )
-    if stage in ("detect", "all"):
+    if stage in ("detect", "all") and _gate("detect"):
         r = subprocess.run(detect_cmd)
         if r.returncode != 0:
             raise RuntimeError(f"detect 失敗 (returncode={r.returncode})")
+        _write_detect_meta(weights_path)
     if stage in ("record", "all"):
         _record.update_workbook(
             exp_name, runs_root="runs",
             val_iou=float(cfg.get("val", {}).get("iou", 0.65)),
             det_conf=float(cfg.get("detect", {}).get("conf", 0.25)),
-            note=f"exp={cfg['exp']} hyp_override={cfg.get('hyp_override') or {}}",
         )
     return {"exp": exp_name}
 
@@ -316,6 +436,8 @@ def main(argv=None):
     ap.add_argument("--stage", default="all",
                     choices=["train", "val", "sweep", "detect", "record", "all"])
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--skip-done", action="store_true",
+                    help="skip stages whose products are up to date (see SKIP/RUN log)")
     ap.add_argument("--engine-dir", default=".",
                     help="training engine root; commands run with cwd here (notebook already %%cd here)")
     ap.add_argument("--repo-root", default=str(REPO_ROOT))
@@ -325,7 +447,8 @@ def main(argv=None):
     return run_stage(args.exp, args.stage, dry_run=args.dry_run,
                      engine_dir=args.engine_dir,
                      repo_root=Path(args.repo_root),
-                     new_exp=args.new_exp, drive_root=args.drive_root)
+                     new_exp=args.new_exp, drive_root=args.drive_root,
+                     skip_done=args.skip_done)
 
 
 if __name__ == "__main__":
