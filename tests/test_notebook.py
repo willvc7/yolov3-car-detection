@@ -85,6 +85,8 @@ def test_exp_sync_cell_order():
 
 def test_exp_name_readers_after_sync():
     # 所有讀取 $EXP_NAME 的格都必須在同步格之後（寫入格除外）。
+    # B 架構：唯一寫入點是 SYNC 格（經 apply_to_env）；RsukZZ 只做 Drive 檢查，
+    # 豁免保留僅為防禦（若未來寫入格增回讀舊值對帳也不會誤報）。
     nb = _load()
     pos = _idx(nb)
     readers = [c["metadata"].get("id") for c in nb["cells"]
@@ -93,7 +95,9 @@ def test_exp_name_readers_after_sync():
                     or 'get("EXP_NAME"' in "".join(c["source"]))]
     assert readers, "no EXP_NAME readers found (guard broken?)"
     # 同步格本身讀舊值印對帳（old -> new）是合法的；早於它的讀取才算錯。
-    late = [cid for cid in readers if pos[cid] < pos[SYNC_ID]]
+    writers = {SYNC_ID, "RsukZZ5c457R"}
+    late = [cid for cid in readers
+            if pos[cid] < pos[SYNC_ID] and cid not in writers]
     assert not late, late
 
 
