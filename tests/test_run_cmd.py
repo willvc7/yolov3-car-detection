@@ -112,6 +112,7 @@ def test_run_stage_sweep_wiring(tmp_path, monkeypatch):
         return []
 
     monkeypatch.setattr(R._exp, "open_experiment", fake_open)
+    monkeypatch.setattr(R._exp, "apply_to_env", lambda *a: None)
     monkeypatch.setattr(R._sweep, "run_sweep", fake_sweep)
     monkeypatch.chdir(tmp_path)
     eng = tmp_path / "eng"
