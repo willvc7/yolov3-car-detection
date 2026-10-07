@@ -7,6 +7,12 @@ Path contract (fixed, see docs/tuning.md):
 - All engine-relative paths (data/*.yaml, runs/...) assume commands
   execute with cwd == engine_dir; run.py chdirs there before delegating.
 - Base hyp file is read-only; overrides land in runs/<EXP_NAME>/hyp.used.yaml.
+- Precedence (方案B, DRIVE_ROOT 固定): EXP_YAML -> yaml[exp] -> pointer
+  檔 -> EXP_NAME/BACKUP_DIR. 父 kernel 手設的 EXP_NAME/BACKUP_DIR 由
+  exp.apply_to_env() 顯式覆寫 (WARN + yaml 優先).
+- NEW_EXP 只留 env 通道: NEW_EXP=1 即開新實驗. 讀取只發生在 run_stage /
+  CLI 入口, 不在 library 深處 (--new-exp / --drive-root 已刪除,
+  傳入即 argparse 報錯).
 """
 
 import argparse
@@ -304,25 +310,28 @@ def detect_up_to_date(cfg, exp_name, runs_dir, weights_path):
     return True, f"{len(jpgs)} images + weights/conf/config match"
 
 
-def resolve_name(cfg, exp_tag=None, dry_run=False, drive_root=None, new_exp=False):
-    """Resolve EXP_NAME (+BACKUP_DIR). dry-run never touches the pointer file."""
+def resolve_name(cfg, exp_tag=None, dry_run=False, new_exp=False):
+    """Resolve EXP_NAME (+BACKUP_DIR). dry-run never touches the pointer file.
+
+    new_exp 為純 bool, 由入口從 NEW_EXP env 讀出後傳入 (library 不讀 env).
+    非 dry-run 時經 exp.apply_to_env() 顯式寫入 os.environ (yaml 優先).
+    """
     tag = exp_tag or cfg["exp"]
     if dry_run:
         return {"exp_name": f"exp_DRYRUN_{_exp.safe_tag(tag)}", "backup_dir": ""}
-    info = _exp.open_experiment(tag, drive_root=drive_root or _exp.DEFAULT_ROOT,
-                                new_exp=new_exp)
+    info = _exp.open_experiment(tag, new_exp=bool(new_exp))
+    _exp.apply_to_env(info["exp_name"], info["backup_dir"])
     return {"exp_name": info["exp_name"], "backup_dir": info["backup_dir"]}
 
 
 def run_stage(cfg_path, stage, dry_run=False, engine_dir="yolov3_pytorch",
-              repo_root=REPO_ROOT, new_exp=False, drive_root=None,
-              skip_done=False):
+              repo_root=REPO_ROOT, skip_done=False):
     cfg = load_experiment(cfg_path)
     cfg["_cfg_path"] = str(cfg_path)
+    new_exp = os.environ.get("NEW_EXP", "0") == "1"
     engine_dir = Path(engine_dir)
     runs_dir = engine_dir / "runs"
-    ident = resolve_name(cfg, dry_run=dry_run,
-                         drive_root=drive_root, new_exp=new_exp)
+    ident = resolve_name(cfg, dry_run=dry_run, new_exp=new_exp)
     exp_name, backup_dir = ident["exp_name"], ident["backup_dir"]
     hyp = build_hyp_used(cfg, repo_root=repo_root)
     hyp_rel = f"runs/{exp_name}/hyp.used.yaml"
@@ -441,13 +450,10 @@ def main(argv=None):
     ap.add_argument("--engine-dir", default=".",
                     help="training engine root; commands run with cwd here (notebook already %%cd here)")
     ap.add_argument("--repo-root", default=str(REPO_ROOT))
-    ap.add_argument("--new-exp", action="store_true")
-    ap.add_argument("--drive-root", default=None)
     args = ap.parse_args(argv)
     return run_stage(args.exp, args.stage, dry_run=args.dry_run,
                      engine_dir=args.engine_dir,
                      repo_root=Path(args.repo_root),
-                     new_exp=args.new_exp, drive_root=args.drive_root,
                      skip_done=args.skip_done)
 
 

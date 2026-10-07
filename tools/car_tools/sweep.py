@@ -15,6 +15,8 @@ try:
 except ImportError:  # pragma: no cover
     raise SystemExit("缺少 openpyxl，請先安裝（pip install openpyxl）")
 
+from .exp import CLOUD_XLSX, DRIVE_MARKER, LOCAL_XLSX
+
 SWP_G = ["基本資訊", "掃參條件", "掃參條件",
          "成績 metrics", "成績 metrics", "成績 metrics", "成績 metrics",
          "結果備註", "結果備註"]
@@ -104,10 +106,15 @@ def run_sweep(exp, weights, data="data/car.yaml", runs_root="runs",
               img=640, batch_size=16,
               iou_list=("0.5", "0.6", "0.65"), conf_list=("0.15", "0.25", "0.4"),
               val_images_dir="../datasets/car/images/val", src_image=None,
-              cloud_xlsx="/content/drive/MyDrive/YOLO_Experiments/數據紀錄表.xlsx",
-              local_xlsx="數據紀錄表.xlsx",
-              backup_dir="", drive_marker="/content/drive/MyDrive"):
-    """掃 val-iou × detect-conf，備份輸出並寫入掃參紀錄。回傳 rows（供測試/除錯）。"""
+              cloud_xlsx=None, local_xlsx=None,
+              backup_dir="", drive_marker=None):
+    """掃 val-iou × detect-conf，備份輸出並寫入掃參紀錄。回傳 rows（供測試/除錯）。
+
+    路徑固定於 exp 模組 (DRIVE_ROOT 固定): 呼叫方不傳即用預設值.
+    """
+    cloud_xlsx = cloud_xlsx or CLOUD_XLSX
+    local_xlsx = local_xlsx or LOCAL_XLSX
+    drive_marker = drive_marker or DRIVE_MARKER
     assert exp, "缺少 EXP_NAME"
     assert backup_dir, "缺少 BACKUP_DIR"
     print("[sweep v6.0] EXP =", exp)

@@ -18,6 +18,8 @@ try:
 except ImportError:  # pragma: no cover
     raise SystemExit("缺少 openpyxl，請先安裝（pip install openpyxl）")
 
+from .exp import CLOUD_XLSX, DRIVE_MARKER, LOCAL_XLSX
+
 TOTAL_H = ["實驗名稱", "日期", "資料集", "epochs", "batch", "imgsz",
            "lr0", "lrf", "momentum", "weight_decay", "warmup_epochs",
            "box", "cls", "obj", "iou_t", "anchor_t", "mosaic", "mixup", "fl_gamma", "scale",
@@ -107,11 +109,15 @@ def _data_names(opt_data, runs_root):
 
 
 def update_workbook(exp, runs_root="runs",
-                    cloud_xlsx="/content/drive/MyDrive/YOLO_Experiments/數據紀錄表.xlsx",
-                    local_xlsx="數據紀錄表.xlsx",
-                    drive_marker="/content/drive/MyDrive",
+                    cloud_xlsx=None, local_xlsx=None, drive_marker=None,
                     val_iou=0.65, det_conf=0.25, note=None):
-    """收集 runs/<exp> 產物並寫入（可重複跑不重複寫）。note 寫入備註欄。"""
+    """收集 runs/<exp> 產物並寫入（可重複跑不重複寫）。note 寫入備註欄。
+
+    路徑固定於 exp 模組 (DRIVE_ROOT 固定): 呼叫方不傳即用預設值.
+    """
+    cloud_xlsx = cloud_xlsx or CLOUD_XLSX
+    local_xlsx = local_xlsx or LOCAL_XLSX
+    drive_marker = drive_marker or DRIVE_MARKER
     assert exp, "缺少 EXP_NAME"
     print("[record v6.0] EXP =", exp)
     runs_root = Path(runs_root)
