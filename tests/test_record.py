@@ -73,9 +73,9 @@ def test_train_time_new_value_overwrites(tmp_path):
 
 def _mk_val_withOpt(tmp_path, val_body, opt_data="data/car.yaml", names=None):
     runs = tmp_path / "runs"
-    (runs / "val" / "exp_T").mkdir(parents=True)
+    (runs / "val" / "exp_T").mkdir(parents=True, exist_ok=True)
     (runs / "val" / "exp_T" / "val.txt").write_text(val_body, encoding="utf-8")
-    (runs / "train" / "exp_T").mkdir(parents=True)
+    (runs / "train" / "exp_T").mkdir(parents=True, exist_ok=True)
     (runs / "train" / "exp_T" / "opt.yaml").write_text(
         "data: %s\n" % opt_data, encoding="utf-8")
     if names is not None:
@@ -143,3 +143,69 @@ def test_class_rows_fallback_all_when_names_missing(tmp_path, monkeypatch):
     assert rows is not None and len(rows) == 1
     assert rows[0][:3] == ["exp_T", "all", 107]
     assert rows[0][3:7] == [0.00465, 0.925, 0.396, 0.142]
+
+
+def _mk_results(tmp_path, p=0.5, r=0.5, m=0.5, m95=0.1):
+    runs = tmp_path / "runs"
+    (runs / "train" / "exp_T").mkdir(parents=True, exist_ok=True)
+    (runs / "train" / "exp_T" / "results.csv").write_text(
+        "epoch,metrics/precision,metrics/recall,metrics/mAP_0.5,metrics/mAP_0.5:0.95,"
+        "train/box_loss,train/obj_loss,train/cls_loss,val/box_loss,val/obj_loss,val/cls_loss\n"
+        f"0,{p},{r},{m},{m95},0.05,0.02,0,0.04,0.01,0\n",
+        encoding="utf-8")
+
+
+def test_total_metrics_prefer_val_txt_over_results(tmp_path, monkeypatch):
+    # 總表 P/R/mAP 與類別明細同源（val.txt），不用 results.csv 的訓練中驗證值
+    monkeypatch.chdir(tmp_path)
+    _mk_results(tmp_path, p=0.5, r=0.5, m=0.5, m95=0.1)
+    _mk_val_withOpt(tmp_path,
+        "                   all         71        107      0.98      0.95      0.98      0.57\n",
+        names=["car"])
+    row = _wb("exp_T", tmp_path)
+    assert (row["P"], row["R"], row["mAP50"], row["mAP50-95"]) == (0.98, 0.95, 0.98, 0.57)
+    # loss 仍取自 results.csv（唯一來源）
+    assert row["train_box_loss"] == 0.05
+
+
+def test_total_metrics_fallback_results_when_no_val_txt(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _mk_results(tmp_path, p=0.5, r=0.5, m=0.5, m95=0.1)
+    row = _wb("exp_T", tmp_path)
+    assert (row["P"], row["R"], row["mAP50"]) == (0.5, 0.5, 0.5)
+
+
+def test_interpret_autofill_and_manual_preserved(tmp_path, monkeypatch):
+    import openpyxl as _ox
+    monkeypatch.chdir(tmp_path)
+    _mk_val_withOpt(tmp_path,
+        "                   all         71        107      0.98      0.95      0.98      0.57\n",
+        names=["car"])
+    _wb("exp_T", tmp_path)
+    rows = _read_cls(tmp_path)
+    assert rows[0][7] == "收斂良好，可進報告"
+    # 手填後重跑：保留手填，不被自動文字覆寫
+    wb = _ox.load_workbook(tmp_path / "runs" / "rec.xlsx")
+    wb["類別明細"].cell(3, 8).value = "手填：已確認"
+    wb.save(tmp_path / "runs" / "rec.xlsx")
+    _wb("exp_T", tmp_path)
+    assert _read_cls(tmp_path)[0][7] == "手填：已確認"
+
+
+def test_practical_note_autofill(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _mk_val_withOpt(tmp_path,
+        "                   all         71        107      0.98      0.95      0.98      0.57\n",
+        names=["car"])
+    runs = tmp_path / "runs"
+    d = runs / "val" / "exp_T_iou065_c025"
+    d.mkdir(parents=True)
+    (d / "val.txt").write_text(
+        "                   all         71        107      0.97      0.96      0.975      0.60\n",
+        encoding="utf-8")
+    (d / "meta.json").write_text(json.dumps(
+        {"kind": "val-iou-practical", "param": "0.65@conf0.25",
+         "weights": "w", "weights_key": "k"}), encoding="utf-8")
+    row = _wb("exp_T", tmp_path)
+    assert "實用mAP50(conf=0.25,iou=0.65)=0.975" in (row.get("備註") or "")
+    assert "conf0.001" in (row.get("備註") or "")

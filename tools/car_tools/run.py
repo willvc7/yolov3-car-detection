@@ -73,7 +73,7 @@ DETECT_EXTRA_ALLOW = [
     "save-conf", "save-crop", "nosave", "view-img", "visualize", "update",
     "vid-stride", "half", "dnn",
 ]
-SWEEP_KEYS = {"iou", "conf"}
+SWEEP_KEYS = {"iou", "conf", "val_conf"}
 
 
 def _suggest(bad, allowed):
@@ -202,10 +202,13 @@ def build_val_cmd(cfg, exp_name, weights=None):
 def build_detect_cmd(cfg, exp_name, weights=None):
     d = dict(cfg.get("detect") or {})
     w = weights or f"runs/train/{exp_name}/weights/best.pt"
+    data_ref = f"data/{cfg['data']}.yaml"
     cmd = ["python", "detect.py", "--weights", w]
     for key, flag, kind in DETECT_SPEC:
         if key in ("source", "img", "conf") and key in d:
             _emit(cmd, flag, kind, d.pop(key))
+    # 類別名由 data yaml 來；不傳則引擎預設 coco128.yaml（舊錯：全程用錯類別名）
+    cmd.extend(["--data", data_ref])
     params = {"project": "runs/detect", "name": exp_name, "exist-ok": True}
     params.update(d)
     for key, flag, kind in DETECT_SPEC:
@@ -423,6 +426,7 @@ def run_stage(cfg_path, stage, dry_run=False, engine_dir="yolov3_pytorch",
             batch_size=cfg.get("val", {}).get("batch-size", 16),
             iou_list=tuple(str(x) for x in sw.get("iou", ("0.5", "0.6", "0.65"))),
             conf_list=tuple(str(x) for x in sw.get("conf", ("0.15", "0.25", "0.4"))),
+            val_conf_list=tuple(str(x) for x in sw.get("val_conf", ("0.25",))),
             backup_dir=backup_dir,
         )
     if stage in ("detect", "all") and _gate("detect"):

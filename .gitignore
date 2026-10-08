@@ -21,7 +21,7 @@ __pycache__/
 .coverage
 
 # excel live records stay on Drive; docs/results.md is the committed record
-數據紀錄表*.xlsx
+temp/
 *.xlsx
 
 # OS / editors

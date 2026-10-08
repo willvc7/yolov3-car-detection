@@ -108,6 +108,72 @@ def _data_names(opt_data, runs_root):
     return None
 
 
+def parse_val_all_row(valtxt):
+    """解析 val.txt 的 all 列，回傳 (instances, [P, R, mAP50, mAP50-95]) 或 None。
+
+    總表與類別明細共用此解析（同源），避免 results.csv 與 val.txt 混用造成的
+    0.01 級差異（見 數據紀錄表 (7) e50/lr002 列的 0.9812 vs 0.966）。
+    """
+    try:
+        t = Path(valtxt).read_text(encoding="utf-8", errors="ignore").replace("\r", "\n")
+    except OSError:
+        return None
+    t = re.sub(r"\x1b\[[0-9;]*m", "", t)
+    for line in t.splitlines():
+        p = line.strip().split()
+        if len(p) >= 7 and p[0] == "all" and p[1].isdigit() and p[2].isdigit():
+            try:
+                return int(p[2]), [float(x) for x in p[3:7]]
+            except ValueError:
+                return None
+    return None
+
+
+def interpret(mAP50):
+    """mAP50 → 初學者解讀（一行中文；手填值永遠優先，不被此覆寫）。"""
+    try:
+        v = float(mAP50)
+    except (TypeError, ValueError):
+        return ""
+    if v >= 0.9:
+        return "收斂良好，可進報告"
+    if v >= 0.5:
+        return "可用但有提升空間（對照掃參 practical 列）"
+    if v > 0.01:
+        return "欠訓練或閾值疑慮，對照掃參 val-iou-practical"
+    return "幾乎無檢出，檢查訓練是否完成"
+
+
+def find_practical_val(runs_root, exp, det_conf):
+    """找 sweep 產的實用閾值 val（val-iou-practical 且 conf==det_conf）。
+
+    回傳 (iou, [P, R, M50, M95])，iou 取最接近 val 預設者；找不到回傳 None。
+    """
+    runs_root = Path(runs_root)
+    want = f"@conf{float(det_conf):g}"
+    best = None
+    for mt in sorted((runs_root / "val").glob(f"{exp}_iou*")):
+        mp = mt / "meta.json"
+        vp = mt / "val.txt"
+        try:
+            m = json.loads(mp.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if m.get("kind") != "val-iou-practical" or not str(m.get("param", "")).endswith(want):
+            continue
+        parsed = parse_val_all_row(vp)
+        if parsed is None:
+            continue
+        try:
+            iou = float(str(m["param"]).split("@")[0])
+        except (ValueError, IndexError):
+            continue
+        # 同 conf 下多個 iou：留 mAP50 最高者（實用視角的最優操作點）
+        if best is None or parsed[1][2] > best[1][2]:
+            best = (iou, parsed[1])
+    return best
+
+
 def update_workbook(exp, runs_root="runs",
                     cloud_xlsx=None, local_xlsx=None, drive_marker=None,
                     val_iou=0.65, det_conf=0.25, note=None):
@@ -130,8 +196,6 @@ def update_workbook(exp, runs_root="runs",
     # ── 收集資料 ──────────────────────────────────────────────
     row = {"實驗名稱": exp,
            "驗證iou": val_iou, "推論conf": det_conf}
-    if note:
-        row["備註"] = note
 
     if results.exists():
         df = pd.read_csv(results)
@@ -149,6 +213,26 @@ def update_workbook(exp, runs_root="runs",
         row.setdefault("epochs", len(df))
     else:
         print(f"找不到 {results}，先確認訓練已完成")
+
+    # 總表 P/R/mAP 與類別明細同源（val.txt all 列），不用 results.csv 的訓練中驗證值；
+    # 兩者混用曾造成同列 0.015 差異（e50 的 0.9904 vs 0.981）。val.txt 缺失才退回 results.csv。
+    _val_all = parse_val_all_row(valtxt)
+    if _val_all is not None:
+        _inst, (_vP, _vR, _vM50, _vM95) = _val_all
+        row["P"], row["R"], row["mAP50"], row["mAP50-95"] = _vP, _vR, _vM50, _vM95
+        print(f"總表 P/R/mAP 取自 val.txt（與類別明細同源）：P={_vP} R={_vR} mAP50={_vM50}")
+    elif "P" not in row:
+        print(f"val.txt 無 all 列，總表 P/R/mAP 沿用 results.csv（若有）")
+
+    if note:
+        row["備註"] = note
+    if "備註" not in row:
+        _prac = find_practical_val(runs_root, exp, det_conf)
+        if _prac is not None:
+            _piou, (_pP, _pR, _pM50, _pM95) = _prac
+            row["備註"] = (f"實用mAP50(conf={float(det_conf):g},iou={_piou:g})={_pM50}；"
+                           f"主欄P/R/mAP為val@conf0.001")
+            print("備註自動填入實用閾值成績:", row["備註"])
 
     _opt_data = None
     if opt.exists():
@@ -217,7 +301,7 @@ def update_workbook(exp, runs_root="runs",
                                  "Instances(數量)": int(p[2]),
                                  "P": vals[0], "R": vals[1],
                                  "mAP50": vals[2], "mAP50-95": vals[3],
-                                 "解讀(初學者看這欄)": ""})
+                                 "解讀(初學者看這欄)": interpret(vals[2])})
             elif len(p) >= 7 and p[0] == "all" and p[1].isdigit() and p[2].isdigit():
                 try:
                     _all = (int(p[2]), [float(x) for x in p[3:7]])
@@ -232,7 +316,7 @@ def update_workbook(exp, runs_root="runs",
                                  "Instances(數量)": _inst,
                                  "P": _vals[0], "R": _vals[1],
                                  "mAP50": _vals[2], "mAP50-95": _vals[3],
-                                 "解讀(初學者看這欄)": ""})
+                                 "解讀(初學者看這欄)": interpret(_vals[2])})
                 print(f"單類別資料集：以 all 列合成類別「{_names[0]}」明細")
             elif _names is None:
                 # opt.yaml/data yaml 找不到：寧可保留 all 聚合值（類別標 all），也不要靜默丟失
@@ -240,7 +324,7 @@ def update_workbook(exp, runs_root="runs",
                                  "Instances(數量)": _inst,
                                  "P": _vals[0], "R": _vals[1],
                                  "mAP50": _vals[2], "mAP50-95": _vals[3],
-                                 "解讀(初學者看這欄)": ""})
+                                 "解讀(初學者看這欄)": interpret(_vals[2])})
                 print(f"[警告] 找不到 data names（opt.yaml data={_opt_data!r}），"
                       f"類別明細以 all 聚合列暫存（類別=all），請確認 data yaml 後重跑 record")
         print(f"解析 val.txt：{len(cls_rows)} 個類別")
@@ -279,6 +363,7 @@ def update_workbook(exp, runs_root="runs",
             if ws2.cell(r, 1).value is not None:
                 _idx[(str(ws2.cell(r, 1).value), str(ws2.cell(r, 2).value))] = r
         n_new, n_upd = 0, 0
+        _interp_c = CLS_H.index("解讀(初學者看這欄)") + 1
         for cr in cls_rows:
             _vals2 = [cr.get(h) for h in CLS_H]
             _r = _idx.get((exp, cr["類別"]))
@@ -286,6 +371,11 @@ def update_workbook(exp, runs_root="runs",
                 ws2.append(_vals2)
                 n_new += 1
             else:
+                _old_interp = ws2.cell(_r, _interp_c).value
+                # 手填解讀永遠優先：既有非空且與自動文字不同 → 視為手填，保留
+                if _old_interp and str(_old_interp) != str(_vals2[_interp_c - 1]):
+                    _vals2[_interp_c - 1] = _old_interp
+                    print(f"解讀欄保留手填值（{exp}/{cr['類別']}）")
                 for _c, _v in enumerate(_vals2, 1):
                     ws2.cell(_r, _c).value = _v
                 n_upd += 1

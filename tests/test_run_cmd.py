@@ -80,6 +80,7 @@ def test_val_detect_cmd_shapes():
     assert "--iou" in val and "0.65" in val
     det = run.build_detect_cmd(cfg, name)
     assert det[:4] == ["python", "detect.py", "--weights", f"runs/train/{name}/weights/best.pt"]
+    assert "--data" in det and "data/car.yaml" in det
     assert "--source" in det and "../datasets/car/images/val" in det
     assert "--conf" in det and "0.25" in det
 
@@ -126,6 +127,7 @@ def test_run_stage_sweep_wiring(tmp_path, monkeypatch):
     assert captured["data"] == "data/car.yaml"
     assert captured["iou_list"] == ("0.5", "0.6", "0.65")
     assert captured["conf_list"] == ("0.15", "0.25", "0.4")
+    assert captured["val_conf_list"] == ("0.25",)
     assert (eng / "runs" / "exp_T" / "hyp.used.yaml").exists()
     assert (eng / "runs" / "exp_T" / "hyp_source.txt").read_text(encoding="utf-8") == "runs/exp_T/hyp.used.yaml"
     assert (eng / "runs" / "exp_T" / "exp.snapshot.yaml").exists()
@@ -143,3 +145,29 @@ def test_e12_e50_configs_differ_only_in_exp_and_epochs():
     aa["train"] = {k: v for k, v in aa["train"].items() if k != "epochs"}
     bb["train"] = {k: v for k, v in bb["train"].items() if k != "epochs"}
     assert aa == bb
+
+
+def test_all_experiment_yamls_valid():
+    # 每個實驗 yaml：檔名 stem == exp、可載入、hyp 可合併、sweep 鍵合法
+    for path in sorted((REPO / "configs" / "experiments").glob("*.yaml")):
+        cfg = run.load_experiment(path)
+        assert cfg["exp"] == path.stem, (path, cfg["exp"])
+        merged = run.build_hyp_used(cfg, repo_root=REPO)
+        assert merged["lr0"] == cfg.get("hyp_override", {}).get("lr0", merged["lr0"])
+        sw = cfg.get("sweep") or {}
+        assert set(sw) <= run.SWEEP_KEYS, (path, set(sw))
+        assert cfg["train"]["epochs"] >= 12
+
+
+def test_bg_series_single_variable_steps():
+    # E4 與 lr002 差異僅 exp 名；E5 與 E4 差異僅 mosaic/mixup（單變量可比）
+    import copy
+    lr002 = yaml.safe_load((REPO / "configs/experiments/car_640_e50_lr002.yaml").read_text(encoding="utf-8"))
+    bg = yaml.safe_load((REPO / "configs/experiments/car_640_e50_bg.yaml").read_text(encoding="utf-8"))
+    m05 = yaml.safe_load((REPO / "configs/experiments/car_640_e50_bg_mosaic05.yaml").read_text(encoding="utf-8"))
+    a, b = copy.deepcopy(lr002), copy.deepcopy(bg)
+    a.pop("exp")
+    b.pop("exp")
+    b.get("sweep", {}).pop("val_conf", None)  # 新版 sweep 顯式列出預設值，舊版走程式預設
+    assert a == b
+    assert m05["hyp_override"] == {"lr0": 0.02, "mosaic": 0.5, "mixup": 0}
