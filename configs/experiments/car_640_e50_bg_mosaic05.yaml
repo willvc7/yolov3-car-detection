@@ -1,0 +1,12 @@
+# E5: E4 + mosaic 消融（mosaic 1.0→0.5、mixup 0.1→0；驗證小資料集強增強假說）。
+# 若 mAP50-95 上升，表示 mosaic 在小圖上切爛小車；反之則維持 1.0。
+exp: car_640_e50_bg_mosaic05
+data: car
+hyp_base: hyps/hyp.scratch-high.yaml
+hyp_override: {lr0: 0.02, mosaic: 0.5, mixup: 0}
+seed: 42
+train: {img: 640, batch: 16, epochs: 50, weights: '', cfg: models/yolov3.yaml,
+        cache: ram, project: runs/train}
+val:   {img: 640, batch-size: 16, iou: 0.65}
+sweep: {iou: [0.5, 0.6, 0.65], conf: [0.15, 0.25, 0.4], val_conf: [0.25]}
+detect: {img: 640, source: ../datasets/car/images/val, conf: 0.25}

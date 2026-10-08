@@ -116,8 +116,7 @@ def test_no_hardcoded_detect_fallback():
     assert "runs/detect/exp/" not in by_id["RVz_yx4sBjtk"], "stale fallback path"
 
 
-def test_preamble_hidden_by_default():
-    # Report 之前的前言區（Project Part 1 及其內容）預設不展開。
+def test_preamble_hidden_by_default():    # Report 之前的前言區（Project Part 1 及其內容）預設不展開。
     nb = _load()
     pos = _idx(nb)
     pre = [c for c in nb["cells"] if pos[c["metadata"].get("id")] < pos[REPORT_CELL]]
@@ -125,3 +124,11 @@ def test_preamble_hidden_by_default():
     shown = [c["metadata"].get("id") for c in pre
              if c["metadata"].get("jupyter", {}).get("source_hidden") is not True]
     assert not shown, shown
+
+
+def test_setup_cell_disables_wandb_and_pins_albumentations():
+    # wandb 30 秒稅 + albumentations 2.x InitScheme 錯：設定格必須處理
+    by_id = _by_id(_load())
+    src = by_id[EXP_YAML_CELL]
+    assert "%env WANDB_DISABLED=true" in src
+    assert "albumentations<2" in src

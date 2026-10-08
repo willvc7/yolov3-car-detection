@@ -171,13 +171,94 @@ def test_manifest_hit_skips_conversion(tmp_path):
     st = csv.stat()
     import json as J
     (yolo / "manifest.json").write_text(J.dumps({
+        "v": C.MANIFEST_VERSION,
         "csv": {"name": csv.name, "size": st.st_size, "mtime_ns": st.st_mtime_ns},
         "seed": 42, "tool": C.TOOL_VERSION,
+        "split": "group", "bg_ratio": 0.15, "bg_train": 0,
         "train": [1, 1, 0, 0], "val": [0, 0, 0, 0],
     }), encoding="utf-8")
     out = C.split_and_convert(raw.parent, yolo, seed=42, skip_done=True,
                               check_dir=str(tmp_path / "chk"))
-    assert out == {"train": (1, 1, 0, 0), "val": (0, 0, 0, 0)}
+    assert out == {"train": (1, 1, 0, 0), "val": (0, 0, 0, 0), "bg_train": 0}
+
+
+def test_manifest_miss_on_version_upgrade(tmp_path):
+    from car_tools import convert as C
+    yolo = tmp_path / "car"
+    yolo.mkdir()
+    import json as J
+    (yolo / "manifest.json").write_text(J.dumps({
+        # v1 舊 manifest：無 v/split/bg 欄位 → 一律重轉
+        "csv": {"name": "train.csv", "size": 10, "mtime_ns": 3},
+        "seed": 42, "tool": C.TOOL_VERSION,
+        "train": [1, 1, 0, 0], "val": [0, 0, 0, 0],
+    }), encoding="utf-8")
+    csv = tmp_path / "train.csv"
+    csv.write_text("image,xmin,ymin,xmax,ymax\na.jpg,1,1,2,2\n", encoding="utf-8")
+    ok, why, _ = C.manifest_up_to_date(yolo, csv, 42)
+    assert not ok and "版本" in why
+
+
+def test_manifest_miss_on_bg_ratio_change(tmp_path):
+    from car_tools import convert as C
+    yolo = tmp_path / "car"
+    yolo.mkdir()
+    import json as J
+    csv = tmp_path / "train.csv"
+    csv.write_text("image,xmin,ymin,xmax,ymax\na.jpg,1,1,2,2\n", encoding="utf-8")
+    st = csv.stat()
+    (yolo / "manifest.json").write_text(J.dumps({
+        "v": C.MANIFEST_VERSION,
+        "csv": {"name": csv.name, "size": st.st_size, "mtime_ns": st.st_mtime_ns},
+        "seed": 42, "tool": C.TOOL_VERSION,
+        "split": "group", "bg_ratio": 0.15, "bg_train": 0,
+        "train": [1, 1, 0, 0], "val": [0, 0, 0, 0],
+    }), encoding="utf-8")
+    ok, why, _ = C.manifest_up_to_date(yolo, csv, 42, bg_ratio=0.3)
+    assert not ok and "bg_ratio" in why
+
+
+def _df_names(names):
+    import pandas as pd
+    return pd.DataFrame({"image": names})
+
+
+def test_split_groups_never_span_train_val():
+    from car_tools import convert as C
+    names = [f"vid_4_{i}.jpg" for i in range(10)] + [f"vid_5_{i}.jpg" for i in range(10)]
+    tr, va, mode = C.split_images(_df_names(names), "image", seed=42)
+    assert mode == "group"
+    assert tr and va and not (tr & va)
+    # 同 video 同側：vid_4 全在 train 或全在 val（兩組必分居兩側或同側其一）
+    tr_groups = {C._group_key(n) for n in tr}
+    va_groups = {C._group_key(n) for n in va}
+    assert not (tr_groups & va_groups), (tr_groups, va_groups)
+
+
+def test_split_single_group_falls_back_contiguous():
+    from car_tools import convert as C
+    names = [f"vid_4_{1000 + i * 20}.jpg" for i in range(10)]
+    tr, va, mode = C.split_images(_df_names(names), "image", seed=42)
+    assert mode.startswith("contiguous")
+    assert tr and va and not (tr & va)
+    # 連續切分：train 取排序後前 80%
+    assert tr == set(sorted(names)[:8])
+
+
+def test_backgrounds_added_as_empty_labels(tmp_path):
+    from car_tools import convert as C
+    img_dir = tmp_path / "imgs"
+    img_dir.mkdir()
+    for n in ["a.jpg", "b.jpg", "bg1.jpg", "bg2.jpg", "bg3.jpg"]:
+        (img_dir / n).write_bytes(b"x")
+    out_i, out_l = tmp_path / "oimg", tmp_path / "olbl"
+    out_i.mkdir()
+    out_l.mkdir()
+    n = C._add_backgrounds(img_dir, ["a.jpg", "b.jpg"], out_i, out_l, 2, seed=42)
+    assert n == 2
+    empties = [p for p in out_l.glob("*.txt") if p.read_text(encoding="utf-8") == ""]
+    assert len(empties) == 2
+    assert all(p.stem.startswith("bg") for p in empties)
 
 
 def test_manifest_miss_on_csv_change(tmp_path):
@@ -186,8 +267,10 @@ def test_manifest_miss_on_csv_change(tmp_path):
     yolo.mkdir()
     import json as J
     (yolo / "manifest.json").write_text(J.dumps({
+        "v": C.MANIFEST_VERSION,
         "csv": {"name": "other.csv", "size": 1, "mtime_ns": 2},
         "seed": 42, "tool": C.TOOL_VERSION,
+        "split": "group", "bg_ratio": 0.15, "bg_train": 0,
         "train": [1, 1, 0, 0], "val": [0, 0, 0, 0],
     }), encoding="utf-8")
     csv = tmp_path / "train.csv"

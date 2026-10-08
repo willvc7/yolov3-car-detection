@@ -102,9 +102,48 @@ def pick_sweep_image(val_images_dir):
     return src
 
 
+def _run_val_once(runs_root, weights, data, img, batch_size, iou, conf, exp,
+                  kind, param, wk):
+    """跑一次 val.py（conf=None 時不傳 --conf-thres，走引擎預設 0.001）。
+
+    回傳 (P, R, M50, M95)，結果落盤 val.txt + meta.json（逐項快取）。
+    """
+    iou, name = str(iou), None
+    conf_s = "" if conf is None else str(conf)
+    tag = f"{exp}_iou{iou.replace('.', '')}" if conf is None else \
+        f"{exp}_iou{iou.replace('.', '')}_c{conf_s.replace('.', '')}"
+    name = tag
+    vt = runs_root / "val" / name / "val.txt"
+    mt = runs_root / "val" / name / "meta.json"
+    t = None
+    if vt.exists() and _meta_ok(mt, kind, param, wk, weights):
+        t = _ansi.sub("", vt.read_text(encoding="utf-8", errors="ignore")).replace("\r", "\n")
+        _vals = all_row(t)
+        if _vals is None or None in _vals:
+            print(f"iou={iou} conf={conf_s or 'default'} 快取損毀（解析失敗），重新執行")
+            t = None
+        else:
+            P, R, M50, M95 = _vals
+            print(f"iou={iou} conf={conf_s or 'default'} (沿用既有) P={P} R={R} mAP50={M50} mAP50-95={M95}")
+    if t is None:
+        cmd = ["python", "val.py", "--img", str(img), "--batch-size", str(batch_size),
+               "--weights", weights, "--data", data,
+               "--iou", iou, "--project", str(runs_root / "val"), "--name", name, "--exist-ok"]
+        if conf is not None:
+            cmd += ["--conf-thres", conf_s]
+        t = run(cmd)
+        (runs_root / "val" / name).mkdir(parents=True, exist_ok=True)
+        vt.write_text(t, encoding="utf-8", errors="ignore")
+        _meta_write(mt, kind, param, wk, weights)
+        P, R, M50, M95 = _require_metrics(t, f"{kind}={param}")
+        print(f"iou={iou} conf={conf_s or 'default'} P={P} R={R} mAP50={M50} mAP50-95={M95}")
+    return [P, R, M50, M95]
+
+
 def run_sweep(exp, weights, data="data/car.yaml", runs_root="runs",
               img=640, batch_size=16,
               iou_list=("0.5", "0.6", "0.65"), conf_list=("0.15", "0.25", "0.4"),
+              val_conf_list=("0.25",),
               val_images_dir="../datasets/car/images/val", src_image=None,
               cloud_xlsx=None, local_xlsx=None,
               backup_dir="", drive_marker=None):
@@ -124,33 +163,25 @@ def run_sweep(exp, weights, data="data/car.yaml", runs_root="runs",
 
     rows = []
 
-    # ── val-iou 掃參 ──────────────────────────────────────────
+    # ── val-iou 掃參（引擎預設 conf 0.001：召回上限參考用）────────
     wk = weights_key(weights)  # 權重指紋：重訓後快取自動失效
     for iou in iou_list:
         iou = str(iou)
-        name = f"{exp}_iou{iou.replace('.', '')}"
-        vt = runs_root / "val" / name / "val.txt"
-        mt = runs_root / "val" / name / "meta.json"
-        t = None
-        if vt.exists() and _meta_ok(mt, "val-iou", iou, wk, weights):
-            t = _ansi.sub("", vt.read_text(encoding="utf-8", errors="ignore")).replace("\r", "\n")
-            _vals = all_row(t)
-            if _vals is None or None in _vals:
-                print(f"iou={iou} 快取損毀（解析失敗），重新執行")
-                t = None
-            else:
-                P, R, M50, M95 = _vals
-                print(f"iou={iou} (沿用既有) P={P} R={R} mAP50={M50} mAP50-95={M95}")
-        if t is None:
-            t = run(["python", "val.py", "--img", str(img), "--batch-size", str(batch_size),
-                     "--weights", weights, "--data", data,
-                     "--iou", iou, "--project", str(runs_root / "val"), "--name", name, "--exist-ok"])
-            (runs_root / "val" / name).mkdir(parents=True, exist_ok=True)
-            vt.write_text(t, encoding="utf-8", errors="ignore")
-            _meta_write(mt, "val-iou", iou, wk, weights)
-            P, R, M50, M95 = _require_metrics(t, f"val-iou={iou}")
-            print(f"iou={iou} P={P} R={R} mAP50={M50} mAP50-95={M95}")
+        P, R, M50, M95 = _run_val_once(
+            runs_root, weights, data, img, batch_size, iou, None, exp,
+            "val-iou", iou, wk)
         rows.append([exp, "val-iou", float(iou), P, R, M50, M95, "", f"權重 {weights}"])
+
+    # ── val-iou-practical 掃參（實用 conf 下的真實成績；根除只看 0.001 的灌水）─
+    for vc in (val_conf_list or ()):
+        vc = str(vc)
+        for iou in iou_list:
+            iou = str(iou)
+            P, R, M50, M95 = _run_val_once(
+                runs_root, weights, data, img, batch_size, iou, vc, exp,
+                "val-iou-practical", f"{iou}@conf{vc}", wk)
+            rows.append([exp, "val-iou-practical", float(iou), P, R, M50, M95, "",
+                         f"conf={vc} 權重 {weights}"])
 
     # ── detect-conf 掃參 ──────────────────────────────────────
     src = src_image or pick_sweep_image(val_images_dir)
