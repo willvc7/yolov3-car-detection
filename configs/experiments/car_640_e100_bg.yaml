@@ -1,0 +1,13 @@
+# E8: 延長訓練輪數極限測試 (`epochs: 100`)
+# 假設：以最優基礎配置（lr0: 0.02, bg）將 epochs 從 50 延長至 100，配合 Cosine Annealing 觀察模型是否仍有進一步收斂空間或出現過擬合。
+
+exp: car_640_e100_bg
+data: car
+hyp_base: hyps/hyp.scratch-high.yaml
+hyp_override: {lr0: 0.02}
+seed: 42
+train: {img: 640, batch: 16, epochs: 100, weights: '', cfg: models/yolov3.yaml,
+cache: ram, project: runs/train}
+val:   {img: 640, batch-size: 16, iou: 0.65}
+sweep: {iou: [0.5, 0.6, 0.65], conf: [0.15, 0.25, 0.4], val_conf: [0.25]}
+detect: {img: 640, source: ../datasets/car/images/val, conf: 0.25}

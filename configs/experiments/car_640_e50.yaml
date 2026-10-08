@@ -1,4 +1,4 @@
-# run2 reproduction: 50 epochs, lr0 unchanged (reproduces run2).
+# E2: 50 epochs, lr0 unchanged (reproduces run2).
 exp: car_640_e50
 data: car
 hyp_base: hyps/hyp.scratch-high.yaml

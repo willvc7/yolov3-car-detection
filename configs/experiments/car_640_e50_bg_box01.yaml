@@ -1,11 +1,13 @@
-# E5: E4 + mosaic 消融（mosaic 1.0→0.5、mixup 0.1→0；驗證小資料集強增強假說）。
-exp: car_640_e50_bg_mosaic05
+# E7: 邊界框損失權重強化 (`box`)
+# 假設：將 box 損失權重從 0.05 提高到 0.1，加大對模型位置預測誤差的懲罰力度，藉此提升高精確度區間（mAP50-95）的表現。
+
+exp: car_640_e50_bg_box01
 data: car
 hyp_base: hyps/hyp.scratch-high.yaml
-hyp_override: {lr0: 0.02, mosaic: 0.5, mixup: 0}
+hyp_override: {lr0: 0.02, box: 0.1}
 seed: 42
 train: {img: 640, batch: 16, epochs: 50, weights: '', cfg: models/yolov3.yaml,
-        cache: ram, project: runs/train}
+cache: ram, project: runs/train}
 val:   {img: 640, batch-size: 16, iou: 0.65}
 sweep: {iou: [0.5, 0.6, 0.65], conf: [0.15, 0.25, 0.4], val_conf: [0.25]}
 detect: {img: 640, source: ../datasets/car/images/val, conf: 0.25}

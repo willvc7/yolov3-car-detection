@@ -1,5 +1,4 @@
 # E4: 同 lr002 hyp（lr0=0.02），差異僅資料（分組切分＋train 背景 15%，manifest v2）。
-# 注意：val 成員與舊三版不同，mAP 跨表比較僅供參考；舊列保留為歷史。
 exp: car_640_e50_bg
 data: car
 hyp_base: hyps/hyp.scratch-high.yaml

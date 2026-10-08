@@ -1,4 +1,4 @@
-# run3: 50 epochs with lr0 lowered for box refinement (single variable vs e50).
+# E3: 50 epochs with lr0 lowered for box refinement (single variable vs e50).
 exp: car_640_e50_lr002
 data: car
 hyp_base: hyps/hyp.scratch-high.yaml
